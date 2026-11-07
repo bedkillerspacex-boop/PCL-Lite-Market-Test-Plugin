@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "pcl.market-test",
+  "name": "PCL Lite Marketplace Test Plugin",
+  "version": "1.0.0",
+  "author": "PCL Lite Test Team",
+  "description": "A small signed test plugin that demonstrates a plugin page, notifications, logging, and private storage.",
+  "apiVersion": 1,
+  "entryAssembly": "PCL.Lite.MarketTest.dll",
+  "entryType": "PCL.Lite.MarketTest.Plugin",
+  "website": "https://github.com/bedkillerspacex-boop/PCL-Lite-Market-Test-Plugin",
+  "releaseAssetUrl": "https://github.com/bedkillerspacex-boop/PCL-Lite-Market-Test-Plugin/releases/download/v1.0.0/pcl-lite-market-test.pclplugin"
+}

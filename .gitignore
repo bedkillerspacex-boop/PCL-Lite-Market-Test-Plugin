@@ -1,0 +1,7 @@
+bin/
+obj/
+*.user
+*.suo
+*.pclplugin
+*.pfx
+*.password.dpapi
