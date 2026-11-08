@@ -24,6 +24,7 @@ public sealed class Plugin : IPclPlugin
     private ObservableCollection<string>? _logLines;
     private TextBox? _logBox;
     private int _counter;
+    private int _isRunAllTestsRunning;
 
     // ---------------------------------------------------------------- lifecycle
 
@@ -220,60 +221,68 @@ public sealed class Plugin : IPclPlugin
     /// <summary>Sequentially runs every non-interactive test and prints a summary.</summary>
     private Task RunAllTestsAsync()
     {
+        if (Interlocked.CompareExchange(ref _isRunAllTestsRunning, 1, 0) != 0)
+        {
+            Log("[SKIP] 全量测试正在运行，请等待当前结果。");
+            return Task.CompletedTask;
+        }
+
         async Task RunAsync()
         {
-            Log("===== 一键全部测试开始（不含弹窗/通知/启动游戏/打开浏览器）=====");
-            var failures = 0;
-            var total = 0;
-
-            async Task CheckAsync(string name, Func<Task> test)
+            try
             {
-                total++;
-                var before = _logLines?.Count ?? 0;
-                try
+                Log("===== 一键全部测试开始（不含弹窗/通知/启动游戏/打开浏览器）=====");
+                var failures = 0;
+                var total = 0;
+
+                async Task CheckAsync(string name, Func<Task> test)
                 {
-                    await test();
+                    total++;
+                    try
+                    {
+                        await test();
+                    }
+                    catch (Exception ex)
+                    {
+                        failures++;
+                        Fail(name, ex);
+                    }
                 }
-                catch (Exception ex)
-                {
-                    failures++;
-                    Fail(name, ex);
-                    return;
-                }
-                var after = _logLines?.Count ?? 0;
-                // 若测试方法自己没输出结果行，补一行 OK，保证每项都有结论
-                if (after == before) Log($"[OK] {name}");
+
+                await CheckAsync("Logger 5 级日志", TestLoggerLevels);
+                await CheckAsync("Plugin 元信息", TestMetadata);
+                await CheckAsync("Launcher 宿主信息", TestLauncherInfo);
+                await CheckAsync("DataDirectory", TestDataDirectory);
+                await CheckAsync("Storage 文本往返", TestStorageText);
+                await CheckAsync("Storage JSON 往返", TestStorageJson);
+                await CheckAsync("Storage 字节/流/Exists/List/Delete", TestStorageBinaryAndStreams);
+                await CheckAsync("Storage 缺失文件", TestStorageMissing);
+                await CheckAsync("Settings 往返", TestSettingsRoundTrip);
+                await CheckAsync("Settings 缺失 key", TestSettingsMissing);
+                await CheckAsync("Events 发布/订阅回路", TestEventPublish);
+                await CheckAsync("Events 新增事件订阅/发布", TestNewEventSubscriptions);
+                await CheckAsync("UI 动态注销页面", TestUnregisterPage);
+                await CheckAsync("Network.GetAsync", TestNetworkGet);
+                await CheckAsync("Network.GetAsync headers/timeout", TestNetworkGetHeaders);
+                await CheckAsync("Network.SendAsync POST", TestNetworkPost);
+                await CheckAsync("Network.SendAsync headers/timeout", TestNetworkSendHeaders);
+                await CheckAsync("Network 二进制响应", TestNetworkBinary);
+                await CheckAsync("Minecraft.GetInstancesAsync", TestMinecraftInstances);
+                await CheckAsync("Minecraft.GetSelectedInstanceAsync", TestMinecraftSelectedInstance);
+                await CheckAsync("Minecraft.GetInstanceConfigurationAsync", TestMinecraftInstanceConfiguration);
+                await CheckAsync("Launcher.DownloadAsync", TestLauncherDownload);
+                await CheckAsync("Launcher.DownloadAsync SHA-256", TestLauncherDownloadSha256);
+                await CheckAsync("IPluginServices", TestServices);
+
+                var summary = failures == 0
+                    ? $"===== 全部测试完成：{total}/{total} 项通过 ====="
+                    : $"===== 全部测试完成：{total - failures}/{total} 项通过，{failures} 项失败（见上方 [FAIL]）=====";
+                Log(summary);
             }
-
-            await CheckAsync("Logger 5 级日志", TestLoggerLevels);
-            await CheckAsync("Plugin 元信息", TestMetadata);
-            await CheckAsync("Launcher 宿主信息", TestLauncherInfo);
-            await CheckAsync("DataDirectory", TestDataDirectory);
-            await CheckAsync("Storage 文本往返", TestStorageText);
-            await CheckAsync("Storage JSON 往返", TestStorageJson);
-            await CheckAsync("Storage 字节/流/Exists/List/Delete", TestStorageBinaryAndStreams);
-            await CheckAsync("Storage 缺失文件", TestStorageMissing);
-            await CheckAsync("Settings 往返", TestSettingsRoundTrip);
-            await CheckAsync("Settings 缺失 key", TestSettingsMissing);
-            await CheckAsync("Events 发布/订阅回路", TestEventPublish);
-            await CheckAsync("Events 新增事件订阅/发布", TestNewEventSubscriptions);
-            await CheckAsync("UI 动态注销页面", TestUnregisterPage);
-            await CheckAsync("Network.GetAsync", TestNetworkGet);
-            await CheckAsync("Network.GetAsync headers/timeout", TestNetworkGetHeaders);
-            await CheckAsync("Network.SendAsync POST", TestNetworkPost);
-            await CheckAsync("Network.SendAsync headers/timeout", TestNetworkSendHeaders);
-            await CheckAsync("Network 二进制响应", TestNetworkBinary);
-            await CheckAsync("Minecraft.GetInstancesAsync", TestMinecraftInstances);
-            await CheckAsync("Minecraft.GetSelectedInstanceAsync", TestMinecraftSelectedInstance);
-            await CheckAsync("Minecraft.GetInstanceConfigurationAsync", TestMinecraftInstanceConfiguration);
-            await CheckAsync("Launcher.DownloadAsync", TestLauncherDownload);
-            await CheckAsync("Launcher.DownloadAsync SHA-256", TestLauncherDownloadSha256);
-            await CheckAsync("IPluginServices", TestServices);
-
-            var summary = failures == 0
-                ? $"===== 全部测试完成：{total}/{total} 项无异常 ====="
-                : $"===== 全部测试完成：{total - failures}/{total} 项无异常，{failures} 项异常（见上方 [FAIL]）=====";
-            Log(summary);
+            finally
+            {
+                Volatile.Write(ref _isRunAllTestsRunning, 0);
+            }
         }
 
         return RunOnPage(RunAsync());
@@ -534,11 +543,11 @@ public sealed class Plugin : IPclPlugin
         var headers = new Dictionary<string, string> { ["X-PCL-TestAll"] = "headers" };
         var response = await Ctx().Network.GetAsync(new Uri("https://httpbin.org/headers"), headers,
             TimeSpan.FromSeconds(20));
+        var echoedValue = ReadEchoedHeader(response.Content, "X-PCL-TestAll", out var echoedName);
         var passed = response.StatusCode is >= 200 and < 300
-            && response.Content.Contains("X-PCL-TestAll", StringComparison.Ordinal)
-            && response.Content.Contains("headers", StringComparison.Ordinal);
-        Log($"Network.GetAsync headers/timeout: status={response.StatusCode}, bytes={response.ContentBytes.Length}, echoed={passed}");
-        Require(passed, "Network.GetAsync did not return the custom header in the response.");
+            && string.Equals(echoedValue, "headers", StringComparison.Ordinal);
+        Log($"Network.GetAsync headers/timeout: status={response.StatusCode}, bytes={response.ContentBytes.Length}, echoed={passed}, header={echoedName ?? "<missing>"}: {echoedValue ?? "<missing>"}, response={Truncate(response.Content, 180)}");
+        Require(passed, "Network.GetAsync did not echo X-PCL-TestAll: headers. Header names are case-insensitive; inspect the logged response for endpoint or proxy behavior.");
     }
 
     private async Task TestNetworkPost()
@@ -560,10 +569,11 @@ public sealed class Plugin : IPclPlugin
         var headers = new Dictionary<string, string> { ["X-PCL-TestAll"] = "send-headers" };
         var response = await Ctx().Network.SendAsync(HttpMethod.Post, new Uri("https://httpbin.org/post"),
             "{\"from\":\"TestAll headers\"}", "application/json", headers, TimeSpan.FromSeconds(20));
+        var echoedValue = ReadEchoedHeader(response.Content, "X-PCL-TestAll", out var echoedName);
         var passed = response.StatusCode is >= 200 and < 300
-            && response.Content.Contains("send-headers", StringComparison.Ordinal);
-        Log($"Network.SendAsync headers/timeout: status={response.StatusCode}, bytes={response.ContentBytes.Length}, echoed={passed}");
-        Require(passed, "Network.SendAsync did not return the custom request header.");
+            && string.Equals(echoedValue, "send-headers", StringComparison.Ordinal);
+        Log($"Network.SendAsync headers/timeout: status={response.StatusCode}, bytes={response.ContentBytes.Length}, echoed={passed}, header={echoedName ?? "<missing>"}: {echoedValue ?? "<missing>"}, response={Truncate(response.Content, 180)}");
+        Require(passed, "Network.SendAsync did not echo X-PCL-TestAll: send-headers. Header names are case-insensitive; inspect the logged response for endpoint or proxy behavior.");
     }
 
     private async Task TestNetworkBinary()
@@ -747,6 +757,42 @@ public sealed class Plugin : IPclPlugin
     {
         _context?.Logger.Info($"[TestAll-Event] {message}");
         AppendLog($"[Event] {message}");
+    }
+
+    private static string? ReadEchoedHeader(string json, string expectedName, out string? actualName)
+    {
+        actualName = null;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !TryGetPropertyIgnoreCase(document.RootElement, "headers", out var headers) ||
+                headers.ValueKind != JsonValueKind.Object)
+                return null;
+            foreach (var header in headers.EnumerateObject())
+            {
+                if (!string.Equals(header.Name, expectedName, StringComparison.OrdinalIgnoreCase)) continue;
+                actualName = header.Name;
+                return header.Value.ValueKind == JsonValueKind.String ? header.Value.GetString() : header.Value.ToString();
+            }
+        }
+        catch (JsonException)
+        {
+            // The caller reports the response snippet when the echo endpoint returned non-JSON data.
+        }
+        return null;
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) continue;
+            value = property.Value;
+            return true;
+        }
+        value = default;
+        return false;
     }
 
     private static void Require(bool condition, string message)
